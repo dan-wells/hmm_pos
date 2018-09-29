@@ -2,59 +2,60 @@
 # States have probabilistic transition and emission tables
 # Models have state maps with transitions inherited from states
 
+# TODO:
+#   - Handle start/end states separately, as non-emitting states
+#   - Probably commit to bigram models only and clean up indexing
+#   - Work out how the backpointers actually work in decode
+
 from collections import defaultdict
 from math import log
 
 
 class Hmm(object):
-    """Hidden Markov model collecting a set of State objects"""
+    """
+    Hidden Markov model with state list, transition and emission probabilities
 
-    def __init__(self, states=None, label_priors=None):
+    Use learn_mle_model() to calculate transition and emission probabilities
+    from labelled data and populate state list.
+
+    Once trained:
+        transition_probs[q_t][q_t-1] gives p(q_t|q_t-1)
+        emissions_probs[q_t][o_t] gives p(o_t|q_t)
+    """
+
+    def __init__(self, states=None, transition_probs=None, emission_probs=None):
         if states is None:
-            states = {}
+            states = []
+        if transition_probs is None:
+            transition_probs = {}
+        if emission_probs is None:
+            emission_probs = {}
         self.states = states
-        self.label_priors = label_priors
+        self.transition_probs = transition_probs
+        self.emission_probs = emission_probs
 
-    def show_labels(self):
-        #if len(self.states.keys()) == 0:
-        try:
-            print(self.states.keys())
-        except(AttributeError):
-            print("State list has not been populated yet! Try learn_emissions()")
-
-    def show_tokens(self, label):
-        print(self.emissions[label])
-
-    def learn_model(self, train_data, n=1):
+    def learn_mle_model(self, train_data, n=1):
         """
-        Learn emission and transition probabilities from training data.
+        Learn transition and emissions probabilities from training data.
 
         Training data should be a list of training sequences (e.g. sentences),
-        each one a list of tuples (token, label). Create a State object for
-        each label in the data and calculate emission and transition
-        probabilities for each State. Transition probabilities are calculated
-        taking n previous states into account. Easy to learn both in a single
-        pass over the dataset.
+        each one a list of tuples (token, label). Calculate transition and
+        emission probabilities from counts using MLE. Transition probabilities
+        can be calculated based on n previous states.
         """
-        # we take [[(token,label),...],...] to read nltk brown corpus easily
-
         # for emission probabilities per label
         tokens_per_label = defaultdict(lambda: defaultdict(int))
         # for label sequences
         label_ngram = defaultdict(lambda: defaultdict(int))
         label_prev = defaultdict(int)
-        # for token sequences -- don't care about these cos they factor out
-        #token_ngram = defaultdict(lambda: defaultdict(int))
-        #token_prev = defaultdict(int)
 
         for train_seq in train_data:
             # add start/end symbols (need n times for higher-order ngrams)
             seq = [('<s>', '<s>')]*n + train_seq + [('</s>', '</s>')]*n
-
             # want to look behind at each step:
             #   p(w_i|w_i-1) = c(w_i-1,w_i) / c(w_i-1)
-
             for i, (token, label) in enumerate(seq[n:]):
+                token = token.lower()
                 tokens_per_label[label][token] += 1
                 # zip(*iterable) is the inverse of zip(iter1, iter2)
                 prev_tokens, prev_labels = zip(*seq[i:i+n])
@@ -67,74 +68,87 @@ class Hmm(object):
         for label, tokens in tokens_per_label.items():
             total_tokens = float(sum(tokens.values()))
             for token, count in tokens.items():
-                tokens[token] = count / total_tokens
-                #tokens[token] = log(count / total_tokens)
-
+                # tokens[token] = count / total_tokens
+                tokens[token] = log(count / total_tokens)
         # calculate mle ngram probs from sequence counts
         for label, ngram_hists in label_ngram.items():
             for context, count in ngram_hists.items():
                 context_total = float(label_prev[context])
-                label_ngram[label][context] = count / context_total
-                #label_ngram[label][context] = log(count / context_total)
+                # label_ngram[label][context] = count / context_total
+                label_ngram[label][context] = log(count / context_total)
 
-        # actually we don't care about token_ngram: this factors out when calculating
-        # most likely tag sequence of many over a single string of tokens
-        #for token, ngram_hists in token_ngram.items():
-        #    for context, count in ngram_hists.items():
-        #        context_total = float(token_prev[context])
-        #        token_ngram[token][context] = count / context_total
-        #        #token_ngram[token][context] = log(count / context_total)
-
-        # create State instance for each label in dataset and assign probabilities
+        # switch defaultdict values to -1000 to represent log(0) prob
+        transition_probs = dict(zip(label_ngram.keys(), [defaultdict(lambda: -1000, v) for v in label_ngram.values()]))
+        emission_probs = dict(zip(tokens_per_label.keys(), [defaultdict(lambda: -1000, v) for v in tokens_per_label.values()]))
+        # assign model components
         for label in tokens_per_label:
-            self.states[label] = State(label=label, emissions=tokens_per_label[label], transitions=label_ngram[label])
-        # p(t|l) = emissions is right. label_ngram gives p(l), token_ngram gives p(t)
-        # neither of those ngrams really belongs in a State, they are priors on the whole model
-        # -> possibly don't need a State class after all lol
+            self.states.append(label)
+            self.transition_probs[label] = transition_probs[label]
+            self.emission_probs[label] = emission_probs[label]
+            # self.transition_probs[label] = label_ngram[label]
+            # self.emission_probs[label] = tokens_per_label[label]
 
-    def decode(self, test_data):
-        """Use Viterbi search to decode test sequences"""
-        pass
+    def decode(self, test_seq, states=None, t_probs=None, e_probs=None, n=1):
+        """Use Viterbi search to decode test sequences input as strings"""
+        # don't try and generalise yet
+        if n != 1:
+            raise NotImplementedError("Sorry, only works with bigrams for now")
 
-    def learn_emissions(self, labelled_tokens):
-        """
-        Calculate p(token|label) from a list of tuples (token,label)
+        # get learned model properties
+        if states is None:
+            states = self.states
+        if t_probs is None:
+            t_probs = self.transition_probs
+        if e_probs is None:
+            e_probs = self.emission_probs
 
-        Take labelled data and derive the list of state labels and emission
-        probabilities for tokens from each state. Populate state list for HMM
-        if not already defined.
-        """
-        tokens_per_label = defaultdict(lambda: defaultdict(int))
-        for token, label in labelled_tokens:
-            tokens_per_label[label][token] += 1
-        # convert raw counts to probabilities
-        for label, tokens in tokens_per_label.items():
-            total_tokens = float(sum(tokens.values()))
-            for token, count in tokens.items():
-                tokens[token] = count / total_tokens
-            # create or update State instance for each label in dataset
-            if not self.states[label]:
-                self.states[label] = State(label=label, emissions=tokens)
-            else:
-                self.states[label].emissions = tokens
+        # process input sequence
+        # bit dumb for now, split on whitespace and lowercase
+        seq = [i.lower() for i in test_seq.split()]
+        seq = ['<s>']*n + seq + ['</s>']*n
 
-    def learn_transitions(self, labelled_tokens):
-        """
-        Calculate p(l_i|l_i-1) from a list of tuples (token,label)
-        """
-        pass
+        # need to track viterbi prob per state plus backpointer to prev state
+        viterbi_probs = [{} for i in range(len(seq))]
+        backpointers = [{} for i in range(len(seq))]
+
+        # initialize: transitions from start state and emissions of first token
+        for q in states:
+            # viterbi_probs[0][q] = t_probs[q][('<s>',)] * e_probs[q][seq[n]]
+            viterbi_probs[0][q] = t_probs[q][('<s>',)] + e_probs[q][seq[n]]
+            backpointers[0][q] = ('<s>',)
+
+        # recursive calculations over rest of input sequence
+        for t, o in enumerate(seq[n:], n):
+            for q in states:
+                # raw_input("Time: {0}, Obs: {1}, State: {2}".format(t, o, q))
+                # pick max(viterbi_probs[t-1][q-1] * t_prob[q][q-1])
+                v_by_t = {}
+                for q_prev in states:
+                    # v_by_t[q_prev] = viterbi_probs[t-1][q_prev] * t_probs[q][(q_prev,)]
+                    v_by_t[q_prev] = viterbi_probs[t-1][q_prev] + t_probs[q][(q_prev,)]
+                backpointers[t][q] = argmax_dict(v_by_t)
+                viterbi_probs[t][q] = max(v_by_t.values()) + e_probs[q][o]
+
+        # then wrap up and follow backpointers
+        # skip emission on </s> (which has 0.0 log prob = certain)
+        # this is "the most likely thing i came from"
+        backpointers.reverse()
+        viterbi_probs.reverse()
+        q_seq = [backpointers[t][argmax_dict(i)] for t, i in enumerate(viterbi_probs[n:-n])]
+        # q_seq = [backpointers[t][argmax_dict(i)] for t,i in enumerate(viterbi_probs)]
+        q_seq.reverse()
+
+        # return (seq, q_seq, viterbi_probs, backpointers)
+        return zip(q_seq, test_seq.split())
 
 
-class State(object):
-    """Single state in an HMM with emission and transition probabilities"""
+# Some utility functions
 
-    def __init__(self, label=None, transitions=None, emissions=None):
-        self.label = label
-        self.transitions = transitions
-        self.emissions = emissions
+def argmax_dict(mydict):
+    """Return key from dict with max value"""
+    return max(mydict, key=lambda x: mydict[x])
 
-    def show_transitions(self):
-        print(self.transitions)
 
-    def show_emissions(self):
-        print(self.emissions)
+def argmax_list(mylist):
+    """Return (first) index of list item with max value"""
+    return mylist.index(max(mylist))
