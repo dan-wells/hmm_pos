@@ -1,7 +1,4 @@
 # Basic HMM framework
-# States have probabilistic transition and emission tables
-# Models have state maps with transitions inherited from states
-
 # TODO:
 #   - Handle start/end states separately, as non-emitting states
 #   - Probably commit to bigram models only and clean up indexing
@@ -77,7 +74,7 @@ class Hmm(object):
                 # label_ngram[label][context] = count / context_total
                 label_ngram[label][context] = log(count / context_total)
 
-        # switch defaultdict values to -1000 to represent log(0) prob
+        # switch defaultdict values to -1000 for log(0) prob on missing tokens when decoding
         transition_probs = dict(zip(label_ngram.keys(), [defaultdict(lambda: -1000, v) for v in label_ngram.values()]))
         emission_probs = dict(zip(tokens_per_label.keys(), [defaultdict(lambda: -1000, v) for v in tokens_per_label.values()]))
         # assign model components
@@ -120,8 +117,6 @@ class Hmm(object):
         # recursive calculations over rest of input sequence
         for t, o in enumerate(seq[n:], n):
             for q in states:
-                # raw_input("Time: {0}, Obs: {1}, State: {2}".format(t, o, q))
-                # pick max(viterbi_probs[t-1][q-1] * t_prob[q][q-1])
                 v_by_t = {}
                 for q_prev in states:
                     # v_by_t[q_prev] = viterbi_probs[t-1][q_prev] * t_probs[q][(q_prev,)]
@@ -131,7 +126,6 @@ class Hmm(object):
 
         # then wrap up and follow backpointers
         # skip emission on </s> (which has 0.0 log prob = certain)
-        # this is "the most likely thing i came from"
         backpointers.reverse()
         viterbi_probs.reverse()
         q_seq = [backpointers[t][argmax_dict(i)] for t, i in enumerate(viterbi_probs[n:-n])]

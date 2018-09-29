@@ -10,7 +10,7 @@ a list of (token, label) items.
 ```python
 # assuming you have the Brown corpus downloaded in NLTK
 from nltk.corpus import brown
-from hmm import Hmm
+import hmm
 
 # use 10k sentences for training
 train_data = brown.tagged_sents(tagset='universal')[:10000]
